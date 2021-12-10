@@ -8,6 +8,7 @@ typedef struct {
 typedef enum {
     SHELL_OKAY = 0,
     SHELL_ERROR,
+    SHELL_PARSE_ERROR,
     SHELL_COMMAND_NOT_FOUND,
     SHELL_INVALID_ARGUMENTS,
     SHELL_EXIT

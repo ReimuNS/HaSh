@@ -10,6 +10,23 @@
 ShellCode shell_execute_built_in_command(Shell* t_shell, const char* t_command, char** t_arguments, size_t t_argumentCount);
 ShellCode shell_execute_external_command(Shell* t_shell, const char* t_command, char** t_arguments);
 
+typedef enum {
+    TOKENIZE_OKAY = 0,
+    TOKENIZE_ERROR_NULL_STRING,
+    TOKENIZE_ERROR_UNMATCHED_QUOTES
+} TokenizeCode;
+
+typedef struct {
+    TokenizeCode code;
+    size_t count;
+} TokenizeResult;
+
+TokenizeResult tokenize_result_create(TokenizeCode t_code, size_t t_count);
+
+TokenizeResult shell_tokenize_input(char* t_command);
+
+void remove_first_char(char* t_string);
+
 Shell* shell_create() {
     Shell* result = malloc(sizeof(Shell));
     result->cwd = getcwd(NULL, 0);
@@ -43,29 +60,27 @@ ShellCode shell_execute_command(Shell* t_shell, const char* t_command) {
     char* command = malloc(sizeof(char) * strlen(t_command) + 1);
     strcpy(command, t_command);
 
-    char* program = strtok(command, " \t");
-    if (program == NULL) {
+    const TokenizeResult tokenizeResult = shell_tokenize_input(command);
+    if (tokenizeResult.code != TOKENIZE_OKAY) {
+        fprintf(stderr, "HaSh: error when parsing command '%s'\n", t_command); // TODO: have a better error message here
+
         free(command);
-        return SHELL_OKAY;
+        return SHELL_PARSE_ERROR;
     }
+    const size_t tokenCount = tokenizeResult.count;
 
-    size_t argumentCount = 0;
-    while (strtok(NULL, " \t") != NULL) {
-        argumentCount++;
-    }
-
-    char** arguments = malloc(sizeof(char*) * (argumentCount + 2));
-    arguments[0] = program;
-    arguments[argumentCount + 1] = NULL;
+    char** arguments = malloc(sizeof(char*) * (tokenCount + 1));
+    arguments[tokenCount] = NULL;
 
     // Copy tokens to token array
-    char* currentToken = program + strlen(program) + 1;
-    for (size_t i = 0; i < argumentCount; i++) {
-        arguments[i + 1] = currentToken;
+    char* currentToken = command;
+    for (size_t i = 0; i < tokenCount; i++) {
+        arguments[i] = currentToken;
         currentToken += strlen(currentToken) + 1;
     }
 
-    ShellCode result = shell_execute_built_in_command(t_shell, program, arguments + 1, argumentCount);
+    char* program = arguments[0];
+    ShellCode result = shell_execute_built_in_command(t_shell, program, arguments + 1, tokenCount - 1);
     if (result == SHELL_COMMAND_NOT_FOUND) {
         result = shell_execute_external_command(t_shell, program, arguments);
     }
@@ -101,11 +116,11 @@ ShellCode shell_execute_external_command(Shell* t_shell, const char* t_program, 
     const pid_t childPID = fork();
     switch (childPID) {
         case -1:
-            fprintf(stderr, "Failed to create child process\n");
+            fprintf(stderr, "HaSh: failed to create child process\n");
             returnCode = SHELL_ERROR;
         case 0: // we are the child
             execvp(t_program, t_arguments);
-            fprintf(stderr, "Error when trying to exec '%s'\n", t_program); // TODO: better error message here
+            fprintf(stderr, "HaSh: error when trying to execute '%s'\n", t_program); // TODO: better error message here
             exit(1);
         default: // we are the parent
             waitpid(childPID, NULL , 0);
@@ -114,3 +129,91 @@ ShellCode shell_execute_external_command(Shell* t_shell, const char* t_program, 
     return returnCode;
 }
 
+TokenizeResult shell_tokenize_input(char* t_command) {
+    typedef enum {
+        STATE_DEFAULT,
+        STATE_DQ_STRING,
+        STATE_SQ_STRING,
+    } ParseState;
+
+    if (t_command == NULL) {
+        return tokenize_result_create(TOKENIZE_ERROR_NULL_STRING, 0);
+    }
+
+    ParseState state = STATE_DEFAULT;
+    char* p = t_command;
+    size_t tokenCount = 0;
+    while (*p != '\0') {
+        switch (state) {
+            case STATE_DEFAULT:
+                if (*p == ' ' || *p == '\t') {
+                    *p = '\0';
+                    p++;
+                    tokenCount++;
+                }
+                else if (*p == '"') {
+                    remove_first_char(p);
+                    state = STATE_DQ_STRING;
+                }
+                else if (*p == '\'') {
+                    remove_first_char(p);
+                    state = STATE_SQ_STRING;
+                }
+                else {
+                    p++;
+                }
+                break;
+            case STATE_DQ_STRING:
+                if (*p == '\\') {
+                    remove_first_char(p);
+                    p++;
+                }
+                else if (*p == '"') {
+                    remove_first_char(p);
+                    state = STATE_DEFAULT;
+                }
+                else {
+                    p++;
+                }
+                break;
+            case STATE_SQ_STRING:
+                if (*p == '\\') {
+                    remove_first_char(p);
+                    p++;
+                }
+                else if (*p == '\'') {
+                    remove_first_char(p);
+                    state = STATE_DEFAULT;
+                }
+                else {
+                    p++;
+                }
+                break;
+        }
+    }
+
+    switch (state) {
+        case STATE_SQ_STRING:
+        case STATE_DQ_STRING:
+            return tokenize_result_create(TOKENIZE_ERROR_UNMATCHED_QUOTES, tokenCount);
+        default:
+            return tokenize_result_create(TOKENIZE_OKAY, tokenCount + 1);
+    }
+}
+
+void remove_first_char(char* t_string) {
+    if (t_string == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; t_string[i] != '\0'; i++) {
+        t_string[i] = t_string[i + 1];
+    }
+}
+
+TokenizeResult tokenize_result_create(TokenizeCode t_code, size_t t_count) {
+    TokenizeResult result;
+    result.code = t_code;
+    result.count = t_count;
+    return result;
+}
