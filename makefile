@@ -1,8 +1,10 @@
 # Constants
 CC=gcc
 
-LINKFLAGS=
-INCLUDEFLAGS=
+LIBRARIES=readline
+
+LINKFLAGS=$(foreach lib,$(LIBRARIES),$(shell pkgconf --libs $(lib)))
+INCLUDEFLAGS=$(foreach lib,$(LIBRARIES),$(shell pkgconf --cflags $(lib)))
 
 OTHER_FLAGS=
 

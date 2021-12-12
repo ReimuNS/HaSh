@@ -23,7 +23,7 @@ ShellCode shell_command_cd(Shell* t_shell, char** t_arguments, size_t t_argument
     if (t_argumentCount == 0) {
         argument = getenv("HOME");
         if (argument == NULL) {
-            fprintf(stderr, "cd: could not find HOME directory\n");
+            fprintf(stderr, "cd: the HOME environment variable has not been set\n");
             return SHELL_ERROR;
         }
     }

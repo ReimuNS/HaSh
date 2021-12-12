@@ -1,34 +1,56 @@
+#include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include <limits.h>
+
+#include <readline/readline.h>
+#include <readline/history.h>
+
 #include "shell.h"
 
-char* read_line(int fd);
+char* generate_prompt(const char* t_cwd);
+const char* find_last_of(const char* t_string, char t_char);
+
 void intHandler(int t_signal);
+
+static volatile sig_atomic_t at_readline = 0;
+sigjmp_buf sigintBuf;
 
 int main(int argc, char* argv[]) {
     Shell* shell = shell_create(NULL);
 
     signal(SIGINT, intHandler);
 
+    ShellCode code = SHELL_OKAY;
+    char* prompt = generate_prompt(shell->cwd);
     char* line = NULL;
+
     while (
-        (printf("[%s]$ ", (shell->cwd ? shell->cwd : ""))),
-        (fflush(stdout)),
-        (line = read_line(STDIN_FILENO))
+        (
+         (at_readline = 1),
+         (sigsetjmp(sigintBuf, 1)),
+         (line = readline(prompt))
+        ) &&
+        (code != SHELL_EXIT)
     ) {
-        const ShellCode code = shell_execute_command(shell, line);
+        at_readline = 0;
+
+        if (*line != '\0') {
+            add_history(line);
+            code = shell_execute_command(shell, line);
+
+            free(prompt);
+            prompt = generate_prompt(shell->cwd);
+        }
 
         free(line);
         line = NULL;
-
-        if (code == SHELL_EXIT) {
-            break;
-        }
     }
+    free(prompt);
 
     // Print exit line if exitted using CTRL-D
     if (line == NULL) {
@@ -39,43 +61,66 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-#define INPUT_BUFFER_SIZE 256
-char* read_line(int fd) {
-    char inputBuffer[INPUT_BUFFER_SIZE] = {0};
-    char* result = NULL;
-    ssize_t resultLength = 0;
-
-    ssize_t lineLength = 0;
-    while ((lineLength = read(STDIN_FILENO, inputBuffer, INPUT_BUFFER_SIZE))) {
-        // Remove trailing new-line
-        if (inputBuffer[lineLength - 1] == '\n') {
-            inputBuffer[lineLength - 1] = '\0';
-            lineLength -= 1;
-        }
-
-        // Allocate and copy to new string
-        size_t newResultLength = resultLength + lineLength;
-        char* newResult = malloc(newResultLength + 1);
-        newResult[newResultLength] = '\0';
-        if (result != NULL) {
-            strncpy(newResult, result, resultLength);
-        }
-        strncpy(newResult + resultLength, inputBuffer, lineLength);
-
-        // Deallocate old string and assign over old string
-        free(result);
-        result = newResult;
-        resultLength = newResultLength;
-
-        // Stop if a newline was found
-        if (lineLength != INPUT_BUFFER_SIZE) {
-            break;
-        }
+char* generate_prompt(const char* t_cwd) {
+    if (t_cwd == NULL) {
+        return NULL;
     }
 
-    return result;
+    const char* prefix = "[";
+    const char* suffix = "]$ ";
+    const char* usernamePCNameSeparator = "@";
+    const char* pcNameDirSeparator = " ";
+
+    const char* username = getenv("USER");
+    if (username == NULL) {
+        username = "unknown";
+    }
+
+    char pcName[HOST_NAME_MAX + 1] = {0};
+    if (gethostname(pcName, HOST_NAME_MAX + 1) == -1) {
+        pcName[0] = '\0';
+    }
+
+    const char* currentDir = find_last_of(t_cwd, '/');
+    if (currentDir == NULL) {
+        currentDir = "unknown";
+    }
+    else {
+        currentDir++;
+    }
+
+    const size_t promptLength = 
+        strlen(prefix) +
+        strlen(username) +
+        strlen(usernamePCNameSeparator) +
+        strlen(pcName) +
+        strlen(pcNameDirSeparator) +
+        strlen(currentDir) +
+        strlen(suffix);
+    char* prompt = malloc(sizeof(char) * (promptLength + 1));
+
+    snprintf(prompt, promptLength + 1, "%s%s%s%s%s%s%s\n", prefix, username, usernamePCNameSeparator, pcName, pcNameDirSeparator, currentDir, suffix);
+
+    return prompt;
+}
+
+const char* find_last_of(const char* t_string, char t_char) {
+    if (t_string == NULL) {
+        return NULL;
+    }
+
+    const char* lastSoFar = NULL;
+    for (const char* current = t_string; *current != '\0'; current++) {
+        if (*current == t_char) {
+            lastSoFar = current;
+        }
+    }
+    return lastSoFar;
 }
 
 void intHandler(int t_signal) {
-    ;
+    if (t_signal == SIGINT && at_readline) {
+        write(STDOUT_FILENO, "\n", 1);
+        siglongjmp(sigintBuf, 1);
+    }
 }
